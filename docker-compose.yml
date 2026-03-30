@@ -1,0 +1,59 @@
+services:
+  # Internal Database for Kestra metadata
+  kestra_postgres:
+    image: postgres:18
+    volumes:
+      - kestra_postgres_data:/var/lib/postgresql
+    environment:
+      POSTGRES_DB: kestra
+      POSTGRES_USER: kestra
+      POSTGRES_PASSWORD: k3str4
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # The Orchestrator
+  kestra:
+    image: kestra/kestra:latest-full
+    user: "root"
+    command: server standalone
+    env_file:
+      - .env_encoded
+    volumes:
+      - kestra_data:/app/storage
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/kestra-wd:/tmp/kestra-wd
+    environment:
+      # Injects your .env variables into Kestra's internal logic
+      KESTRA_VARIABLES_PROJECT_ID: ${GCP_PROJECT_ID}
+      KESTRA_VARIABLES_BUCKET: ${GCP_BUCKET_NAME}
+      KESTRA_CONFIGURATION: |
+        datasources:
+          postgres:
+            url: jdbc:postgresql://kestra_postgres:5432/kestra
+            driverClassName: org.postgresql.Driver
+            username: kestra
+            password: k3str4
+        kestra:
+          repository:
+            type: postgres
+          storage:
+            type: local
+            local:
+              basePath: "/app/storage"
+          queue:
+            type: postgres
+          tasks:
+            tmpDir:
+              path: /tmp/kestra-wd/tmp
+    ports:
+      - "8080:8080"
+    depends_on:
+      kestra_postgres:
+        condition: service_healthy
+
+volumes:
+  kestra_postgres_data:
+  kestra_data:

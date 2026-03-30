@@ -1,0 +1,130 @@
+id: 08_student_performance_etl
+namespace: zoomcamp
+
+description: |
+  ScholarTrack MVP ETL flow.
+
+  Purpose:
+  1. Extract the student performance CSV from GitHub
+  2. Transform it by adding:
+     - student_id
+     - assessment_date
+     - assessment_year
+     - assessment_month
+  3. Load the transformed file into GCS
+
+labels:
+  project: scholartrack
+  layer: etl
+  source: github
+  target: gcs
+
+tasks:
+  # =========================
+  # EXTRACT
+  # =========================
+  - id: extract_csv_from_github
+    type: io.kestra.plugin.core.http.Download
+    description: "Extract step: download the source CSV from the GitHub repository."
+    uri: "https://raw.githubusercontent.com/ahmedrsal05/scholar-track/main/StudentPerformanceFactors%20%281%29.csv"
+    retry:
+      type: constant
+      interval: PT10S
+      maxAttempt: 3
+      maxDuration: PT2M
+
+  # =========================
+  # TRANSFORM
+  # =========================
+  - id: transform_student_performance
+    type: io.kestra.plugin.scripts.python.Script
+    description: |
+      Transform step:
+      - reads the downloaded CSV
+      - adds a sequential student_id
+      - adds a synthetic assessment_date spread across an academic year
+      - derives assessment_year and assessment_month for downstream SQL/viz
+      - writes the transformed CSV back out for the load step
+    containerImage: python:3.11-slim
+    beforeCommands:
+      - pip install pandas
+    inputFiles:
+      source.csv: "{{ outputs.extract_csv_from_github.uri }}"
+    outputFiles:
+      - transformed_student_performance.csv
+    script: |
+      import pandas as pd
+      import sys
+
+      try:
+          df = pd.read_csv("source.csv")
+
+          if df.empty:
+              raise ValueError("Source CSV is empty.")
+
+          df.insert(0, "student_id", [f"STU_{i:05d}" for i in range(1, len(df) + 1)])
+
+          start_date = pd.Timestamp("2024-09-01")
+          end_date = pd.Timestamp("2025-06-30")
+
+          if len(df) == 1:
+              assessment_dates = [start_date]
+          else:
+              assessment_dates = pd.date_range(
+                  start=start_date,
+                  end=end_date,
+                  periods=len(df)
+              )
+
+          df["assessment_date"] = pd.to_datetime(assessment_dates).strftime("%Y-%m-%d")
+          df["assessment_year"] = pd.to_datetime(df["assessment_date"]).dt.year
+          df["assessment_month"] = pd.to_datetime(df["assessment_date"]).dt.month
+
+          df.to_csv("transformed_student_performance.csv", index=False)
+
+          print(f"Transform complete. Output rows: {len(df)}")
+          print(f"Output columns: {list(df.columns)}")
+
+      except Exception as e:
+          print(f"TRANSFORM FAILED: {e}", file=sys.stderr)
+          raise
+
+  # =========================
+  # LOAD
+  # =========================
+  - id: upload_transformed_csv_to_gcs
+    type: io.kestra.plugin.gcp.gcs.Upload
+    description: "Load step: upload the transformed CSV to the raw zone in GCS."
+    from: "{{ outputs.transform_student_performance.outputFiles['transformed_student_performance.csv'] }}"
+    to: "gs://{{ kv('GCP_BUCKET_NAME') }}/raw/student_performance/transformed_student_performance.csv"
+    retry:
+      type: constant
+      interval: PT10S
+      maxAttempt: 3
+      maxDuration: PT2M
+
+# Reuse your existing secret + KV architecture
+pluginDefaults:
+  - type: io.kestra.plugin.gcp
+    values:
+      serviceAccount: "{{ secret('GCP_CREDS') }}"
+      projectId: "{{ kv('GCP_PROJECT_ID') }}"
+
+# Flow-level failure fallback
+errors:
+  - id: log_failure_summary
+    type: io.kestra.plugin.core.log.Log
+    message: |
+      ScholarTrack ETL failed.
+      Flow: {{ flow.id }}
+      Namespace: {{ flow.namespace }}
+      Execution ID: {{ execution.id }}
+      State: {{ execution.state.current }}
+
+  - id: log_failure_context
+    type: io.kestra.plugin.core.log.Log
+    message: |
+      Check which stage failed:
+      1. extract_csv_from_github  -> GitHub/raw URL issue
+      2. transform_student_performance -> Python/data issue
+      3. upload_transformed_csv_to_gcs -> GCP auth/bucket/path issue
