@@ -1,7 +1,7 @@
 -- =====================================================
 -- ScholarTrack Data Warehouse SQL
--- Project: valid-unfolding-485807-q6
--- Dataset: scholartrack_warehouse
+-- Replace YOUR_PROJECT_ID if running this manually.
+-- The Kestra flow renders these values automatically.
 -- Flow: stage -> final source-of-truth -> aggregate
 -- =====================================================
 
@@ -15,7 +15,7 @@
 -- Clustered by School_Type, Internet_Access
 -- =====================================================
 
-CREATE OR REPLACE TABLE `valid-unfolding-485807-q6.scholartrack_warehouse.student_performance`
+CREATE OR REPLACE TABLE `YOUR_PROJECT_ID.scholartrack_warehouse.student_performance`
 PARTITION BY assessment_date
 CLUSTER BY School_Type, Internet_Access AS
 SELECT
@@ -43,4 +43,4 @@ SELECT
     Distance_from_Home,
     Gender,
     Exam_Score
-FROM `valid-unfolding-485807-q6.scholartrack_warehouse.student_performance_stage`;
+FROM `YOUR_PROJECT_ID.scholartrack_warehouse.student_performance_stage`;

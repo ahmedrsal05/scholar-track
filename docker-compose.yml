@@ -1,7 +1,7 @@
 services:
   # Internal Database for Kestra metadata
   kestra_postgres:
-    image: postgres:18
+    image: postgres:17-alpine
     volumes:
       - kestra_postgres_data:/var/lib/postgresql
     environment:
@@ -16,19 +16,22 @@ services:
 
   # The Orchestrator
   kestra:
-    image: kestra/kestra:latest-full
+    image: kestra/kestra:v1.3.30
     user: "root"
-    command: server standalone
+    command: server standalone --flow-path /app/flows
     env_file:
       - .env_encoded
     volumes:
       - kestra_data:/app/storage
+      - ./flows:/app/flows:ro
       - /var/run/docker.sock:/var/run/docker.sock
       - /tmp/kestra-wd:/tmp/kestra-wd
     environment:
-      # Injects your .env variables into Kestra's internal logic
-      KESTRA_VARIABLES_PROJECT_ID: ${GCP_PROJECT_ID}
-      KESTRA_VARIABLES_BUCKET: ${GCP_BUCKET_NAME}
+      # ENV_ values are available in flows through {{ envs.* }}.
+      ENV_GCP_PROJECT_ID: ${GCP_PROJECT_ID}
+      ENV_GCP_BUCKET_NAME: ${GCP_BUCKET_NAME}
+      ENV_GCP_DATASET: ${GCP_DATASET}
+      ENV_GCP_LOCATION: ${GCP_LOCATION}
       KESTRA_CONFIGURATION: |
         datasources:
           postgres:

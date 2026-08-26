@@ -1,0 +1,6 @@
+project_id    = "your-gcp-project-id"
+region        = "us-central1"
+location      = "US"
+bucket_name   = "your-globally-unique-scholar-track-bucket"
+dataset_id    = "scholartrack_warehouse"
+force_destroy = false

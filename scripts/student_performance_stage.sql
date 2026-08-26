@@ -1,37 +1,38 @@
 -- =====================================================
--- 1) FINAL DETAILED WAREHOUSE TABLE
+-- 1) STAGING TABLE
 -- Purpose:
--- Main analytical table for row-level reporting.
--- Partitioned by assessment_date
--- Clustered by School_Type, Internet_Access
+-- Loads the transformed CSV from GCS into a native BigQuery table.
+-- Replace YOUR_PROJECT_ID and YOUR_BUCKET_NAME if running this manually.
 -- =====================================================
 
-CREATE OR REPLACE TABLE `valid-unfolding-485807-q6.scholartrack_warehouse.student_performance`
-PARTITION BY assessment_date
-CLUSTER BY School_Type, Internet_Access AS
-SELECT
-    student_id,
-    assessment_date,
-    assessment_year,
-    assessment_month,
-    Hours_Studied,
-    Attendance,
-    Parental_Involvement,
-    Access_to_Resources,
-    Extracurricular_Activities,
-    Sleep_Hours,
-    Previous_Scores,
-    Motivation_Level,
-    Internet_Access,
-    Tutoring_Sessions,
-    Family_Income,
-    Teacher_Quality,
-    School_Type,
-    Peer_Influence,
-    Physical_Activity,
-    Learning_Disabilities,
-    Parental_Education_Level,
-    Distance_from_Home,
-    Gender,
-    Exam_Score
-FROM `valid-unfolding-485807-q6.scholartrack_warehouse.student_performance_stage`;
+LOAD DATA OVERWRITE `YOUR_PROJECT_ID.scholartrack_warehouse.student_performance_stage` (
+    student_id STRING,
+    Hours_Studied INT64,
+    Attendance INT64,
+    Parental_Involvement STRING,
+    Access_to_Resources STRING,
+    Extracurricular_Activities STRING,
+    Sleep_Hours INT64,
+    Previous_Scores INT64,
+    Motivation_Level STRING,
+    Internet_Access STRING,
+    Tutoring_Sessions INT64,
+    Family_Income STRING,
+    Teacher_Quality STRING,
+    School_Type STRING,
+    Peer_Influence STRING,
+    Physical_Activity INT64,
+    Learning_Disabilities STRING,
+    Parental_Education_Level STRING,
+    Distance_from_Home STRING,
+    Gender STRING,
+    Exam_Score INT64,
+    assessment_date DATE,
+    assessment_year INT64,
+    assessment_month INT64
+)
+FROM FILES (
+    format = 'CSV',
+    skip_leading_rows = 1,
+    uris = ['gs://YOUR_BUCKET_NAME/raw/student_performance/transformed_student_performance.csv']
+);

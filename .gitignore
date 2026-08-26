@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Local .terraform directories
 .terraform/
 
@@ -36,14 +35,16 @@ override.tf.json
 # Ignore CLI configuration files
 .terraformrc
 terraform.rc
-=======
+
+# Local configuration and credentials
 .env
 .env_encoded
-*.json
-.terraform/
-terraform.tfstate
-terraform.tfstate.backup
+service-account*.json
+credentials*.json
+
+# Local runtime and editor files
 __pycache__/
-*.pyc
+*.py[cod]
 .DS_Store
->>>>>>> 42274d5 (Initial clean data engineering project)
+
+.bruin.yml

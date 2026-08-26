@@ -11,7 +11,9 @@ description: |
      - assessment_date
      - assessment_year
      - assessment_month
-  3. Load the transformed file into GCS
+  3. Store the transformed file in GCS
+  4. Load a BigQuery staging table
+  5. Build reporting tables and verify the result
 
 labels:
   project: scholartrack
@@ -26,7 +28,7 @@ tasks:
   - id: extract_csv_from_github
     type: io.kestra.plugin.core.http.Download
     description: "Extract step: download the source CSV from the GitHub repository."
-    uri: "https://raw.githubusercontent.com/ahmedrsal05/scholar-track/main/StudentPerformanceFactors%20%281%29.csv"
+    uri: "https://raw.githubusercontent.com/ahmedrsal05/scholar-track/main/data/raw/StudentPerformanceFactors.csv"
     retry:
       type: constant
       interval: PT10S
@@ -47,7 +49,7 @@ tasks:
       - writes the transformed CSV back out for the load step
     containerImage: python:3.11-slim
     beforeCommands:
-      - pip install pandas
+      - pip install pandas==2.3.3
     inputFiles:
       source.csv: "{{ outputs.extract_csv_from_github.uri }}"
     outputFiles:
@@ -96,19 +98,109 @@ tasks:
     type: io.kestra.plugin.gcp.gcs.Upload
     description: "Load step: upload the transformed CSV to the raw zone in GCS."
     from: "{{ outputs.transform_student_performance.outputFiles['transformed_student_performance.csv'] }}"
-    to: "gs://{{ kv('GCP_BUCKET_NAME') }}/raw/student_performance/transformed_student_performance.csv"
+    to: "gs://{{ envs.gcp_bucket_name }}/raw/student_performance/transformed_student_performance.csv"
     retry:
       type: constant
       interval: PT10S
       maxAttempt: 3
       maxDuration: PT2M
 
-# Reuse your existing secret + KV architecture
+  - id: load_bigquery_stage
+    type: io.kestra.plugin.gcp.bigquery.LoadFromGcs
+    description: "Load the transformed CSV into a repeatable staging table."
+    from:
+      - "gs://{{ envs.gcp_bucket_name }}/raw/student_performance/transformed_student_performance.csv"
+    destinationTable: "{{ envs.gcp_project_id }}.{{ envs.gcp_dataset }}.student_performance_stage"
+    location: "{{ envs.gcp_location }}"
+    format: CSV
+    createDisposition: CREATE_IF_NEEDED
+    writeDisposition: WRITE_TRUNCATE
+    csvOptions:
+      fieldDelimiter: ","
+      skipLeadingRows: 1
+    schema:
+      fields:
+        - { name: student_id, type: STRING, mode: REQUIRED }
+        - { name: Hours_Studied, type: INTEGER }
+        - { name: Attendance, type: INTEGER }
+        - { name: Parental_Involvement, type: STRING }
+        - { name: Access_to_Resources, type: STRING }
+        - { name: Extracurricular_Activities, type: STRING }
+        - { name: Sleep_Hours, type: INTEGER }
+        - { name: Previous_Scores, type: INTEGER }
+        - { name: Motivation_Level, type: STRING }
+        - { name: Internet_Access, type: STRING }
+        - { name: Tutoring_Sessions, type: INTEGER }
+        - { name: Family_Income, type: STRING }
+        - { name: Teacher_Quality, type: STRING }
+        - { name: School_Type, type: STRING }
+        - { name: Peer_Influence, type: STRING }
+        - { name: Physical_Activity, type: INTEGER }
+        - { name: Learning_Disabilities, type: STRING }
+        - { name: Parental_Education_Level, type: STRING }
+        - { name: Distance_from_Home, type: STRING }
+        - { name: Gender, type: STRING }
+        - { name: Exam_Score, type: INTEGER }
+        - { name: assessment_date, type: DATE, mode: REQUIRED }
+        - { name: assessment_year, type: INTEGER, mode: REQUIRED }
+        - { name: assessment_month, type: INTEGER, mode: REQUIRED }
+
+  - id: build_final_table
+    type: io.kestra.plugin.gcp.bigquery.Query
+    description: "Create the partitioned and clustered source-of-truth table."
+    location: "{{ envs.gcp_location }}"
+    sql: |
+      CREATE OR REPLACE TABLE `{{ envs.gcp_project_id }}.{{ envs.gcp_dataset }}.student_performance`
+      PARTITION BY assessment_date
+      CLUSTER BY School_Type, Internet_Access AS
+      SELECT
+        student_id, assessment_date, assessment_year, assessment_month,
+        Hours_Studied, Attendance, Parental_Involvement, Access_to_Resources,
+        Extracurricular_Activities, Sleep_Hours, Previous_Scores,
+        Motivation_Level, Internet_Access, Tutoring_Sessions, Family_Income,
+        Teacher_Quality, School_Type, Peer_Influence, Physical_Activity,
+        Learning_Disabilities, Parental_Education_Level, Distance_from_Home,
+        Gender, Exam_Score
+      FROM `{{ envs.gcp_project_id }}.{{ envs.gcp_dataset }}.student_performance_stage`;
+
+  - id: build_monthly_table
+    type: io.kestra.plugin.gcp.bigquery.Query
+    description: "Create the reporting-ready monthly summary."
+    location: "{{ envs.gcp_location }}"
+    sql: |
+      CREATE OR REPLACE TABLE `{{ envs.gcp_project_id }}.{{ envs.gcp_dataset }}.student_performance_monthly` AS
+      SELECT
+        assessment_year,
+        assessment_month,
+        School_Type,
+        AVG(Exam_Score) AS avg_score,
+        COUNT(student_id) AS student_count
+      FROM `{{ envs.gcp_project_id }}.{{ envs.gcp_dataset }}.student_performance`
+      GROUP BY assessment_year, assessment_month, School_Type;
+
+  - id: verify_output
+    type: io.kestra.plugin.gcp.bigquery.Query
+    description: "Fail the execution if staging and final row counts do not match."
+    location: "{{ envs.gcp_location }}"
+    sql: |
+      ASSERT (
+        SELECT COUNT(*) > 0
+        FROM `{{ envs.gcp_project_id }}.{{ envs.gcp_dataset }}.student_performance`
+      ) AS 'Final table is empty';
+
+      ASSERT (
+        SELECT
+          (SELECT COUNT(*) FROM `{{ envs.gcp_project_id }}.{{ envs.gcp_dataset }}.student_performance_stage`)
+          =
+          (SELECT COUNT(*) FROM `{{ envs.gcp_project_id }}.{{ envs.gcp_dataset }}.student_performance`)
+      ) AS 'Staging and final row counts do not match';
+
+# Apply shared GCP authentication to all GCS and BigQuery tasks.
 pluginDefaults:
   - type: io.kestra.plugin.gcp
     values:
-      serviceAccount: "{{ secret('GCP_CREDS') }}"
-      projectId: "{{ kv('GCP_PROJECT_ID') }}"
+      serviceAccount: "{{ secret('GCP_SERVICE_ACCOUNT') }}"
+      projectId: "{{ envs.gcp_project_id }}"
 
 # Flow-level failure fallback
 errors:
@@ -128,3 +220,5 @@ errors:
       1. extract_csv_from_github  -> GitHub/raw URL issue
       2. transform_student_performance -> Python/data issue
       3. upload_transformed_csv_to_gcs -> GCP auth/bucket/path issue
+      4. load_bigquery_stage -> BigQuery access or schema issue
+      5. build/verify tasks -> SQL, dataset, or data-quality issue
